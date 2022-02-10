@@ -1,0 +1,45 @@
+library(tidyverse)
+
+egfr <- function(creat, sex, age){
+  
+  creat <- as.numeric(creat)
+  sex <- as.character(sex)
+  age <- as.numeric(age)
+  
+  if (!is.numeric(creat)) stop(return('creatinine must be numeric'))
+  if (!sex %in% c('male','female')) stop(return('sex must be: male or female'))
+  if (!is.numeric(age)) stop(return('age must be numeric'))
+ 
+  k <- 0
+  k[sex == 'female'] <- 0.7
+  k[sex == 'male'] <- 0.9
+
+  alpha <- 0
+  alpha[sex == 'female'] <- -0.241
+  alpha[sex == 'male'] <- -0.302
+  
+  constante <- 0
+  constante[sex == 'male'] <- 1
+  constante[sex == 'female'] <- 1.012
+
+  egfr <- 142 * (min(creat/k, 1)^alpha) * (max(creat/k,1)^-1.200) * (0.9938^age) * constante
+  
+  return(egfr)
+}
+
+
+## Examples
+kidney <- data.frame(
+  creat = c(2, 4.5, 5, 1, 1.2, 0.9, 5),
+  sex = c('male','male','female','female','male','male','female'),
+  age = c(30, 22, 50, 60, 70, 80, 55)
+)
+
+# return eGFR
+kidney <- kidney %>% 
+  mutate(egfr = case_when(
+    sex == 'female' & creat <= 0.7 ~ 143 * ((creat/0.7)^-0.241) * (0.9938^age),
+    sex == 'female' & creat > 0.7 ~ 143 * ((creat/0.7)^-1.200) * (0.9938^age),
+    sex == 'male' & creat <= 0.9 ~ 142 * ((creat/0.9)^-0.302) * (0.9938^age),
+    sex == 'male' & creat > 0.9 ~ 142 * ((creat/0.9)^-1.200) * (0.9938^age)
+  ))
