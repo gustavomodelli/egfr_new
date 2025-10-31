@@ -1,0 +1,107 @@
+---
+title: "eGFR slope"
+output: html_document
+date: "2025-10-31"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(nlme)
+
+```
+
+
+```{r}
+# SMALL SIMULATED DATASET + LME FIT -------------------------------
+# Reproducible toy data for longitudinal eGFR with irregular visits
+
+set.seed(123)
+
+# Design
+n_id    <- 30                          # patients
+min_vis <- 4; max_vis <- 8             # visits per patient
+beta0   <- 55                          # population intercept (mL/min/1.73m2)
+beta1   <- -2.2                        # population slope (mL/min/1.73m2 per year)
+trt_eff <- 1.0                         # treatment effect on slope (+1 mL/min/yr)
+
+# Random effects SDs and residual SD
+sd_int  <- 10                          # SD of random intercepts
+sd_slo  <- 1.2                         # SD of random slopes
+cor_is  <- -0.25                       # corr between intercept and slope
+sd_eps  <- 4.5                         # residual error SD
+
+# Build RE covariance
+Sigma <- matrix(c(sd_int^2, cor_is*sd_int*sd_slo,
+                  cor_is*sd_int*sd_slo, sd_slo^2), 2, 2)
+
+# Simulate id-level data
+ids <- sprintf("P%02d", 1:n_id)
+trt <- rbinom(n_id, 1, 0.5)            # 0=control, 1=treatment
+
+sim_list <- lapply(seq_len(n_id), function(j){
+  n_ij <- sample(min_vis:max_vis, 1)
+  # irregular visit times over ~2 years
+  time_yr <- sort(round(runif(n_ij, 0, 2), 3))
+  # random effects
+  u      <- MASS::mvrnorm(1, mu = c(0,0), Sigma = Sigma)
+  u0     <- u[1]; u1 <- u[2]
+  # optional "acute dip" in first 0.15 yr (hemodynamic effect), partially reversed later
+  acute  <- ifelse(time_yr <= 0.15, -4, 0) + ifelse(time_yr > 0.15 & time_yr <= 0.5, 2, 0)
+
+  # mean trajectory
+  mu <- (beta0 + u0) +
+        (beta1 + u1 + trt[j]*trt_eff) * time_yr +
+        acute
+
+  egfr <- pmax(5, rnorm(n_ij, mu, sd_eps))  # floor at 5 just to avoid negatives
+  data.frame(
+    id = ids[j],
+    trt = factor(trt[j], levels = c(0,1), labels = c("Control","Treatment")),
+    time_yr = time_yr,
+    egfr = egfr
+  )
+})
+
+dat <- do.call(rbind, sim_list)
+
+# Peek
+head(dat, 10)
+#>       id       trt time_yr     egfr
+#> P01 Control   0.016  ...
+# (values will print)
+
+```
+
+
+```{r}
+
+# Fit linear mixed model: random intercepts & slopes by patient
+# Treatment effect on slope via time_yr:trt interaction
+suppressPackageStartupMessages(library(nlme))
+fit <- lme(
+  egfr ~ time_yr * trt,                # fixed: intercept, time, trt, time×trt
+  random = ~ time_yr | id,             # random intercept + slope for each id
+  data = dat,
+  method = "REML",
+  na.action = na.omit
+)
+
+summary(fit)
+
+# Estimated mean slopes (mL/min/1.73m2 per year) by arm
+b <- fixed.effects(fit)
+slope_control   <- b["time_yr"]
+slope_treatment <- b["time_yr"] + b["time_yr:trtTreatment"]
+c(slope_control = slope_control, slope_treatment = slope_treatment)
+
+# OPTIONAL: quick plot (base R)
+plot(egfr ~ time_yr, data = dat, pch = 16, cex = 0.6, xlab = "Time (years)", ylab = "eGFR")
+abline(b["(Intercept)"], slope_control, lwd = 2)  # control mean line
+abline(b["(Intercept)"] + b["trtTreatment"], slope_treatment, lwd = 2, lty = 2)  # treatment mean
+legend("topright", c("Control mean","Treatment mean"), lwd = 2, lty = c(1,2), bty = "n")
+
+```
+
